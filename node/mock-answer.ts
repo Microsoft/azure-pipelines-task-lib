@@ -20,6 +20,8 @@ export interface TaskLibAnswers {
     rmRF?: { [key: string]: { success: boolean } },
     stats?: { [key: string]: any }, // Can't use `fs.Stats` as most existing uses don't mock all required properties
     which?: { [key: string]: string },
+    getVariable?:{ [key: string]: string},
+    getVariables?:{ [key: string]: string},
 }
 
 export type MockedCommand = keyof TaskLibAnswers;
