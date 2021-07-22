@@ -810,6 +810,11 @@ export interface FindOptions {
      * symbolic link directories.
      */
     followSymbolicLinks: boolean;
+
+    /**
+     * When true, missing files will not cause an error and will be skipped.
+     */
+    skipMissingFiles?: boolean;
 }
 
 /**
@@ -858,6 +863,45 @@ export function retry(func: Function, args: any[], retryOptions: RetryOptions = 
     }
 }
 
+function _getStats (path: string, isPathToSearch: boolean, options: FindOptions): fs.Stats {
+    // stat returns info about the target of a symlink (or symlink chain),
+    // lstat returns info about a symlink itself
+    let stats: fs.Stats;
+
+    if (options.followSymbolicLinks) {
+        try {
+            // use stat (following all symlinks)
+            stats = fs.statSync(path);
+        } catch (err) {
+            if (err.code == 'ENOENT' && options.allowBrokenSymbolicLinks) {
+                // fallback to lstat (broken symlinks allowed)
+                stats = fs.lstatSync(path);
+                debug(`  ${path} (broken symlink)`);
+            } else {
+                throw err;
+            }
+        }
+    } else if (options.followSpecifiedSymbolicLink && isPathToSearch) {
+        try {
+            // use stat (following symlinks for the specified path and this is the specified path)
+            stats = fs.statSync(path);
+        } catch (err) {
+            if (err.code == 'ENOENT' && options.allowBrokenSymbolicLinks) {
+                // fallback to lstat (broken symlinks allowed)
+                stats = fs.lstatSync(path);
+                debug(`  ${path} (broken symlink)`);
+            } else {
+                throw err;
+            }
+        }
+    } else {
+        // use lstat (not following symlinks)
+        stats = fs.lstatSync(path);
+    }
+
+    return stats;
+}
+
 /**
  * Recursively finds all paths a given path. Returns an array of paths.
  *
@@ -903,49 +947,19 @@ export function find(findPath: string, options?: FindOptions): string[] {
         while (stack.length) {
             // pop the next item and push to the result array
             let item = stack.pop()!; // non-null because `stack.length` was truthy
-            result.push(item.path);
 
             // stat the item.  the stat info is used further below to determine whether to traverse deeper
-            //
-            // stat returns info about the target of a symlink (or symlink chain),
-            // lstat returns info about a symlink itself
             let stats: fs.Stats;
-            if (options.followSymbolicLinks) {
-                try {
-                    // use stat (following all symlinks)
-                    stats = fs.statSync(item.path);
+            try {
+                stats = _getStats(item.path, !result.length, options);
+            } catch (err) {
+                if (err.code == 'ENOENT' && options.skipMissingFiles) {
+                    debug(`File "${item.path}" seems to be removed during find operation execution - so skipping it.`);
+                    continue;
                 }
-                catch (err) {
-                    if (err.code == 'ENOENT' && options.allowBrokenSymbolicLinks) {
-                        // fallback to lstat (broken symlinks allowed)
-                        stats = fs.lstatSync(item.path);
-                        debug(`  ${item.path} (broken symlink)`);
-                    }
-                    else {
-                        throw err;
-                    }
-                }
+                throw err;
             }
-            else if (options.followSpecifiedSymbolicLink && result.length == 1) {
-                try {
-                    // use stat (following symlinks for the specified path and this is the specified path)
-                    stats = fs.statSync(item.path);
-                }
-                catch (err) {
-                    if (err.code == 'ENOENT' && options.allowBrokenSymbolicLinks) {
-                        // fallback to lstat (broken symlinks allowed)
-                        stats = fs.lstatSync(item.path);
-                        debug(`  ${item.path} (broken symlink)`);
-                    }
-                    else {
-                        throw err;
-                    }
-                }
-            }
-            else {
-                // use lstat (not following symlinks)
-                stats = fs.lstatSync(item.path);
-            }
+            result.push(item.path);
 
             // note, isDirectory() returns false for the lstat of a symlink
             if (stats.isDirectory()) {
@@ -1012,13 +1026,15 @@ function _debugFindOptions(options: FindOptions): void {
     debug(`findOptions.allowBrokenSymbolicLinks: '${options.allowBrokenSymbolicLinks}'`);
     debug(`findOptions.followSpecifiedSymbolicLink: '${options.followSpecifiedSymbolicLink}'`);
     debug(`findOptions.followSymbolicLinks: '${options.followSymbolicLinks}'`);
+    debug(`findOptions.skipMissingFiles: '${options.skipMissingFiles}'`);
 }
 
 function _getDefaultFindOptions(): FindOptions {
     return <FindOptions>{
         allowBrokenSymbolicLinks: false,
         followSpecifiedSymbolicLink: true,
-        followSymbolicLinks: true
+        followSymbolicLinks: true,
+        skipMissingFiles: false
     };
 }
 
